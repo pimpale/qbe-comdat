@@ -30,6 +30,7 @@ char *tok[] = {
 	"blit", "l", "w", "sh", "uh", "h", "sb", "ub", "b",
 	"d", "s", "z", "loadw", "loadl", "loads", "loadd",
 	"alloc1", "alloc2", "thread", "extern", "common",
+	"comdat",
 
 };
 enum {

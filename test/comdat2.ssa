@@ -1,0 +1,44 @@
+# skip amd64_win (pthread and tls not implemented)
+
+# comdat thread-local data
+
+export thread comdat data $"tls<int>" = align 4 { w 42 }
+export thread comdat data $"tlz<int>" = { z 8 }
+
+export
+function w $get() {
+@start
+	%a =w loadw thread $"tls<int>"
+	%b =w loadw thread $"tlz<int>"
+	%c =w add %a, %b
+	ret %c
+}
+
+export
+function $set(w %a, w %b) {
+@start
+	storew %a, thread $"tls<int>"
+	storew %b, thread $"tlz<int>"
+	ret
+}
+
+# >>> driver
+# #include <pthread.h>
+# extern int get(void);
+# extern void set(int, int);
+# int r;
+# void *thread(void *v) {
+# 	r = get();
+# 	return v;
+# }
+# int main() {
+# 	pthread_t t;
+# 	if (get() != 42) return 1;
+# 	set(1, 2);
+# 	if (get() != 3) return 2;
+# 	pthread_create(&t, 0, thread, 0);
+# 	pthread_join(t, 0);
+# 	if (r != 42) return 3;
+# 	return 0;
+# }
+# <<<

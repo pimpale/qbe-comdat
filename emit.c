@@ -6,6 +6,57 @@ enum {
 	SecBss,
 };
 
+/* emit the section directive of a comdat
+ * definition; the linker keeps only one of
+ * the comdat definitions of a symbol
+ */
+static void
+emitcomdat(char *n, Lnk *l, int s, FILE *f)
+{
+	static char *sec[2][3] = {
+		[0][SecText] = ".text",
+		[0][SecData] = ".data",
+		[0][SecBss] = ".bss",
+		[1][SecData] = ".tdata",
+		[1][SecBss] = ".tbss",
+	};
+	char *q, *b;
+
+	/* n is either a plain or a quoted
+	 * symbol name, when it is quoted the
+	 * section name has to be quoted too;
+	 * the closing quote is the one of n
+	 */
+	q = "";
+	if (n[0] == '"') {
+		q = "\"";
+		n++;
+	}
+	if (T.windows) {
+		if (l->thread)
+			err("comdat thread data not supported for this target");
+		b = s == SecText ? ".text" : ".data";
+		fprintf(f,
+			".section %s%s$%s,\"%s\"\n"
+			".linkonce discard",
+			q, b, n, s == SecText ? "x" : "w"
+		);
+		return;
+	}
+	b = sec[l->thread != 0][s];
+	assert(b);
+	/* elf comdat group, the group
+	 * signature is the symbol itself
+	 */
+	fprintf(f, ".section %s%s.%s,\"a%s%sG\",@%s,%s%s,comdat",
+		q, b, n,
+		s == SecText ? "x" : "w",
+		l->thread ? "T" : "",
+		s == SecBss ? "nobits" : "progbits",
+		q, n
+	);
+}
+
 void
 emitlnk(char *n, Lnk *l, int s, FILE *f)
 {
@@ -42,12 +93,22 @@ emitlnk(char *n, Lnk *l, int s, FILE *f)
 		fprintf(f, ".section %s", l->sec);
 		if (l->secf)
 			fprintf(f, ",%s", l->secf);
-	} else
+	} else if (l->comdat && !T.apple)
+		emitcomdat(n, l, s, f);
+	else
 		fputs(sec[l->thread != 0][s], f);
 	fputc('\n', f);
 	if (l->align)
 		fprintf(f, ".balign %d\n", l->align);
-	if (l->export)
+	if (l->comdat && T.apple)
+		fprintf(f,
+			".globl %s%s\n"
+			".weak_definition %s%s\n",
+			pfx, n, pfx, n
+		);
+	else if (l->comdat && !T.windows)
+		fprintf(f, ".weak %s%s\n", pfx, n);
+	else if (l->export || l->comdat)
 		fprintf(f, ".globl %s%s\n", pfx, n);
 	fprintf(f, "%s%s%s:\n", pfx, n, sfx);
 }

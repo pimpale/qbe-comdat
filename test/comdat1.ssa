@@ -1,0 +1,77 @@
+# comdat definitions can appear in several
+# translation units, the linker keeps one;
+# check that they can be used as regular
+# definitions, including with quoted names
+# (those are not referenced directly from
+# the driver because C compilers might not
+# quote them in their output)
+
+export comdat
+function w $"add<int, >"(w %a, w %b) {
+@start
+	%c =w add %a, %b
+	ret %c
+}
+
+# comdat implies export
+comdat
+function w $twice(w %a) {
+@start
+	%c =w call $"add<int, >"(w %a, w %a)
+	ret %c
+}
+
+export comdat data $"SIZE<char>" = align 8 { l 2 }
+export comdat data $"ZERO<int>" = { z 16 }
+export comdat data $tab = { w 1, w 2, l $"add<int, >" }
+comdat data $zero = align 16 { z 32 }
+
+export data $syms = {
+	l $"add<int, >",
+	l $"SIZE<char>",
+	l $"ZERO<int>",
+}
+
+export
+function l $addr() {
+@start
+	ret $"add<int, >"
+}
+
+export
+function l $sum() {
+@start
+	%a =l loadl $"SIZE<char>"
+	%b =l loadl $"ZERO<int>"
+	%c =l add %a, %b
+	ret %c
+}
+
+# >>> driver
+# typedef int addf(int, int);
+# extern struct {
+# 	addf *add;
+# 	long long *size;
+# 	long long *zero;
+# } syms;
+# extern struct { int a, b; addf *f; } tab;
+# extern char zero[32];
+# extern int twice(int);
+# extern addf *addr(void);
+# extern long long sum(void);
+# int main() {
+# 	int i;
+# 	if (syms.add(1, 2) != 3) return 1;
+# 	if (twice(21) != 42) return 2;
+# 	if (*syms.size != 2) return 3;
+# 	if (syms.zero[0] != 0 || syms.zero[1] != 0) return 4;
+# 	if (tab.a != 1 || tab.b != 2 || tab.f != syms.add) return 5;
+# 	if (addr() != syms.add) return 6;
+# 	syms.zero[0] = 40;
+# 	if (sum() != 42) return 7;
+# 	if ((unsigned long long)zero % 16 != 0) return 8;
+# 	for (i=0; i<32; i++)
+# 		if (zero[i] != 0) return 9;
+# 	return 0;
+# }
+# <<<

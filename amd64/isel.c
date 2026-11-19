@@ -496,11 +496,137 @@ Emit:
 	}
 }
 
-static Ins *
-flagi(Ins *i0, Ins *i)
+/* A jump or a group of conditional moves can
+ * use the flags set by an instruction located
+ * further up in the block (see seljmp() and
+ * selsel()); flagi() makes sure that the IL
+ * instructions in between leave the flags
+ * alone, but it cannot tell if the machine
+ * instructions selected for them will; e.g.,
+ * the address of an extern symbol with an
+ * offset is computed with an add
+ *
+ * so, the pending flags user is recorded in
+ * fuse and the instructions selected after it
+ * are checked; if one of them clobbers the
+ * flags, the user is changed to rely on an
+ * explicit comparison of the result of the
+ * flag-setting instruction with zero
+ */
+static struct {
+	Ins *fi;   /* flag-setting instruction, 0 if no pending user */
+	Ref r;     /* result of fi */
+	Blk *b;    /* the user is the jump of b, or */
+	int nsel;  /* nsel conditional moves at pos */
+	Ins *pos;  /* the user starts here in insb */
+	Ins *chk;  /* [chk, pos) is known to leave flags alone */
+	int xtest; /* fi is an and to turn into an xtest */
+} fuse;
+
+static void
+flaguse(Ins *fi, Ref r, Blk *b, Ins *pos, int nsel, int xtest)
 {
+	assert(!fuse.fi);
+	assert(amd64_op[fi->op].zflag && req(fi->to, r));
+	fuse.fi = fi;
+	fuse.r = r;
+	fuse.b = b;
+	fuse.nsel = nsel;
+	fuse.pos = pos;
+	fuse.chk = pos;
+	fuse.xtest = xtest;
+}
+
+static int
+keepsflags(Ins *i, Fn *fn)
+{
+	Con *c;
+
+	if (isxsel(i->op))
+		return 1;
+	if (i->op == Oaddr && rtype(i->arg[0]) == RCon) {
+		/* initial-exec tls addresses are
+		 * computed with an add in emitins()
+		 */
+		c = &fn->con[i->arg[0].val];
+		if (c->type == CAddr)
+		if (c->sym.type == SExtThr && !T.apple)
+			return 0;
+	}
+	return amd64_op[i->op].lflag;
+}
+
+/* must be called before selecting the
+ * instruction i of the current block
+ */
+static void
+flagchk(Ins *i, Fn *fn)
+{
+	Ins *i1;
+	Ref r;
+
+	if (!fuse.fi)
+		return;
+	for (i1=curi; i1<fuse.chk; i1++)
+		if (!keepsflags(i1, fn))
+			break;
+	if (i1 < fuse.chk) {
+		/* the flags are clobbered, insert
+		 * a comparison right before the
+		 * user
+		 */
+		if (curi == &insb[0])
+			die("emit, too many instructions");
+		i1 = fuse.pos;
+		memmove(curi-1, curi, (i1-curi) * sizeof *curi);
+		curi--;
+		i1[-1] = (Ins){
+			.op = Oxcmp, .cls = Kw,
+			.arg = {CON_Z, fuse.r},
+		};
+		if (fuse.b)
+			fuse.b->jmp.type = Jjf + Cine;
+		for (; i1<&fuse.pos[fuse.nsel]; i1++) {
+			assert(isxsel(i1->op));
+			i1->op = Oxsel + Cine;
+		}
+		fuse.fi = 0;
+		return;
+	}
+	fuse.chk = curi;
+	if (i == fuse.fi) {
+		if (fuse.xtest) {
+			assert(i->op == Oand);
+			i->op = Oxtest;
+			i->to = R;
+			if (rtype(i->arg[1]) == RCon) {
+				r = i->arg[1];
+				i->arg[1] = i->arg[0];
+				i->arg[0] = r;
+			}
+		}
+		fuse.fi = 0;
+	}
+}
+
+static Ins *
+flagi(Ins *i0, Ins *i, Fn *fn)
+{
+	Con *c;
+
 	while (i>i0) {
 		i--;
+		if (i->op == Osar || i->op == Oshr || i->op == Oshl) {
+			/* shifts leave the flags alone
+			 * when the count is zero
+			 */
+			if (rtype(i->arg[1]) != RCon)
+				return 0;
+			c = &fn->con[i->arg[1].val];
+			if (c->type != CBits
+			|| (c->bits.i & (KWIDE(i->cls) ? 63 : 31)) == 0)
+				return 0;
+		}
 		if (amd64_op[i->op].zflag)
 			return i;
 		if (amd64_op[i->op].lflag)
@@ -514,9 +640,10 @@ static Ins*
 selsel(Fn *fn, Blk *b, Ins *i, Num *tn)
 {
 	Ref r, cr[2];
-	int c, k, swap, gencmp, gencpy;
-	Ins *isel0, *isel1, *fi;
+	int c, k, swap, gencmp, gencpy, xtest, far;
+	Ins *isel0, *isel1, *fi, *i0, *i1, *ins;
 	Tmp *t;
+	uint n;
 
 	assert(i->op == Osel1);
 	for (isel0=i; b->ins<isel0; isel0--) {
@@ -528,9 +655,9 @@ selsel(Fn *fn, Blk *b, Ins *i, Num *tn)
 	r = isel0->arg[0];
 	assert(rtype(r) == RTmp);
 	t = &fn->tmp[r.val];
-	fi = flagi(b->ins, isel0);
+	fi = flagi(b->ins, isel0, fn);
 	cr[0] = cr[1] = R;
-	gencmp = gencpy = swap = 0;
+	gencmp = gencpy = swap = xtest = far = 0;
 	k = Kw;
 	c = Cine;
 	if (!fi || !req(fi->to, r)) {
@@ -556,18 +683,17 @@ selsel(Fn *fn, Blk *b, Ins *i, Num *tn)
 			cr[0] = fi->arg[0];
 			cr[1] = fi->arg[1];
 			*fi = (Ins){.op = Onop};
-		}
+		} else
+			far = 1;
 	}
 	else if (fi->op == Oand && t->nuse == 1
 	     && (rtype(fi->arg[0]) == RTmp ||
 	         rtype(fi->arg[1]) == RTmp)) {
-		fi->op = Oxtest;
-		fi->to = R;
-		if (rtype(fi->arg[1]) == RCon) {
-			r = fi->arg[1];
-			fi->arg[1] = fi->arg[0];
-			fi->arg[0] = r;
-		}
+		/* fi is turned into an xtest
+		 * in flagchk()
+		 */
+		far = 1;
+		xtest = 1;
 	}
 	else {
 	Other:
@@ -577,17 +703,37 @@ selsel(Fn *fn, Blk *b, Ins *i, Num *tn)
 		 */
 		if (t->nuse == 1)
 			gencpy = 1;
+		far = 1;
 	}
 	/* generate conditional moves */
+	i0 = curi;
 	for (isel1=i; isel0<isel1; --isel1) {
 		isel1->op = Oxsel+c;
 		sel(*isel1, tn, fn);
 	}
+	/* the instructions generated to fix the
+	 * arguments of the conditional moves may
+	 * clobber the flags; they are moved before
+	 * the flag-setting instruction
+	 */
+	n = i0 - curi;
+	ins = emalloc((n+1) * sizeof ins[0]);
+	memcpy(ins, curi, n * sizeof ins[0]);
+	curi = i0;
+	for (i1=&ins[n]; i1>ins;)
+		if (isxsel((--i1)->op))
+			emiti(*i1);
 	assert(!gencmp || !gencpy);
 	if (gencmp)
 		selcmp(cr, k, swap, fn);
+	else if (far && curi < i0)
+		flaguse(fi, r, 0, curi, i0-curi, xtest);
 	if (gencpy)
 		emit(Ocopy, Kw, R, r, R);
+	for (i1=&ins[n]; i1>ins;)
+		if (!isxsel((--i1)->op))
+			emiti(*i1);
+	free(ins);
 	*isel0 = (Ins){.op = Onop};
 	return isel0;
 }
@@ -615,7 +761,7 @@ seljmp(Blk *b, Fn *fn)
 		b->s2 = 0;
 		return;
 	}
-	fi = flagi(b->ins, &b->ins[b->nins]);
+	fi = flagi(b->ins, &b->ins[b->nins], fn);
 	if (!fi || !req(fi->to, r)) {
 		selcmp((Ref[2]){r, CON_Z}, Kw, 0, fn);
 		b->jmp.type = Jjf + Cine;
@@ -629,20 +775,18 @@ seljmp(Blk *b, Fn *fn)
 		if (t->nuse == 1) {
 			selcmp(fi->arg, k, swap, fn);
 			*fi = (Ins){.op = Onop};
-		}
+		} else
+			flaguse(fi, r, b, &insb[NIns], 0, 0);
 		b->jmp.type = Jjf + c;
 	}
 	else if (fi->op == Oand && t->nuse == 1
 	     && (rtype(fi->arg[0]) == RTmp ||
 	         rtype(fi->arg[1]) == RTmp)) {
-		fi->op = Oxtest;
-		fi->to = R;
+		/* fi is turned into an xtest
+		 * in flagchk()
+		 */
+		flaguse(fi, r, b, &insb[NIns], 0, 1);
 		b->jmp.type = Jjf + Cine;
-		if (rtype(fi->arg[1]) == RCon) {
-			r = fi->arg[1];
-			fi->arg[1] = fi->arg[0];
-			fi->arg[0] = r;
-		}
 	}
 	else {
 		/* since flags are not tracked in liveness,
@@ -651,6 +795,7 @@ seljmp(Blk *b, Fn *fn)
 		 */
 		if (t->nuse == 1)
 			emit(Ocopy, Kw, R, r, R);
+		flaguse(fi, r, b, &insb[NIns], 0, 0);
 		b->jmp.type = Jjf + Cine;
 	}
 }
@@ -916,23 +1061,30 @@ amd64_isel(Fn *fn)
 	num = emalloc(n * sizeof num[0]);
 	for (b=fn->start; b; b=b->link) {
 		curi = &insb[NIns];
+		memset(num, 0, n * sizeof num[0]);
+		anumber(num, b, fn->con);
+		/* the jump is selected first so that
+		 * the instructions fixing the phi
+		 * arguments do not end up between
+		 * the comparison and the jump
+		 */
+		seljmp(b, fn);
 		for (sb=(Blk*[3]){b->s1, b->s2, 0}; *sb; sb++)
 			for (p=(*sb)->phi; p; p=p->link) {
 				for (a=0; p->blk[a] != b; a++)
 					assert(a+1 < p->narg);
 				fixarg(&p->arg[a], p->cls, 0, fn);
 			}
-		memset(num, 0, n * sizeof num[0]);
-		anumber(num, b, fn->con);
-		seljmp(b, fn);
 		for (i=&b->ins[b->nins]; i!=b->ins;) {
 			--i;
+			flagchk(i, fn);
 			assert(i->op != Osel0);
 			if (i->op == Osel1)
 				i = selsel(fn, b, i, num);
 			else
 				sel(*i, num, fn);
 		}
+		assert(!fuse.fi);
 		idup(b, curi, &insb[NIns]-curi);
 	}
 	free(num);

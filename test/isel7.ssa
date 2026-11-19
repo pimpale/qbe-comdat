@@ -1,0 +1,354 @@
+# skip amd64_win (extern symbols are not supported)
+
+# make sure the flags used by conditional moves
+# and conditional jumps are not clobbered by the
+# instructions selected between the instruction
+# setting them and their user;  on amd64, the
+# address of an extern symbol with an offset is
+# computed with an add, and ultof is lowered to
+# a sequence of flag-clobbering instructions
+
+# conditional move, the address is computed
+# after the comparison with zero
+export function l $cmov1(l %p) {
+@start
+	%c =w cnel %p, 0
+	jnz %c, @yes, @no
+@yes
+	%a =l add %p, 24
+	jmp @join
+@no
+	%b =l add extern $tok, 8
+@join
+	%r =l phi @yes %a, @no %b
+	%v =l loadl %r
+	ret %v
+}
+
+# conditional moves, the comparison is done
+# again right before them
+export function l $cmov2(l %p) {
+@start
+	%c =w ceql %p, 0
+	jnz %c, @yes, @no
+@yes
+	%a0 =l add extern $tok, 8
+	%a1 =l add extern $tok, 24
+	jmp @join
+@no
+	%b0 =l add extern $tok, 16
+	%b1 =l add extern $tok, 32
+@join
+	%r0 =l phi @yes %a0, @no %b0
+	%r1 =l phi @yes %a1, @no %b1
+	%v0 =l loadl %r0
+	%v1 =l loadl %r1
+	%v =l add %v0, %v1
+	ret %v
+}
+
+# conditional move, the flags of a comparison
+# with several uses are reused
+export function l $cmov3(l %p) {
+@start
+	%c =w ceql %p, 0
+	jnz %c, @yes, @no
+@yes
+	%a =l add extern $tok, 8
+	jmp @join
+@no
+	%b =l add extern $tok, 16
+@join
+	%r =l phi @yes %a, @no %b
+	%v =l loadl %r
+	%e =l extuw %c
+	%s =l add %v, %e
+	ret %s
+}
+
+# conditional move, the flags of an and are
+# reused (the and would be turned into a test)
+export function l $cmov4(w %x) {
+@start
+	%c =w and %x, 1
+	jnz %c, @yes, @no
+@yes
+	%a =l add extern $tok, 8
+	jmp @join
+@no
+	%b =l add extern $tok, 16
+@join
+	%r =l phi @yes %a, @no %b
+	%v =l loadl %r
+	ret %v
+}
+
+# conditional move, the flags of a sub are
+# reused
+export function l $cmov5(w %x, w %y) {
+@start
+	%c =w sub %x, %y
+	jnz %c, @yes, @no
+@yes
+	%a =l add extern $tok, 8
+	jmp @join
+@no
+	%b =l add extern $tok, 16
+@join
+	%r =l phi @yes %a, @no %b
+	%v =l loadl %r
+	ret %v
+}
+
+# conditional moves for which reusing the
+# flags of an and or of a sub is fine
+export function l $cmov6(w %x, l %a, l %b) {
+@start
+	%c =w and %x, 1
+	jnz %c, @yes, @no
+@yes
+	jmp @join
+@no
+@join
+	%r =l phi @yes %a, @no %b
+	ret %r
+}
+
+export function l $cmov7(w %x, w %y, l %a, l %b) {
+@start
+	%c =w sub %x, %y
+	jnz %c, @yes, @no
+@yes
+	jmp @join
+@no
+@join
+	%r =l phi @yes %a, @no %b
+	%e =l extsw %c
+	%s =l add %r, %e
+	ret %s
+}
+
+# conditional jump, the phi argument is fixed
+# at the end of the block
+export function l $jmp1(l %p) {
+@start
+	%b =l add extern $tok, 8
+	%c =w cnel %p, 0
+	jnz %c, @yes, @join
+@yes
+	%a =l call $ident(l %p)
+@join
+	%r =l phi @yes %a, @start %b
+	%v =l loadl %r
+	ret %v
+}
+
+# conditional jump, the flags of a comparison
+# with several uses are reused
+export function l $jmp2(l %p) {
+@start
+	%c =w cnel %p, 0
+	%b =l add extern $tok, 8
+	%x =l loadl %b
+	jnz %c, @yes, @no
+@yes
+	%y0 =l extuw %c
+	%z0 =l add %y0, 100
+	ret %z0
+@no
+	%y1 =l extuw %c
+	%z1 =l add %x, %y1
+	ret %z1
+}
+
+export function d $jmp3(l %p, l %u) {
+@start
+	%c =w cnel %p, 0
+	%d =d ultof %u
+	jnz %c, @yes, @no
+@yes
+	%y0 =d swtof %c
+	%z0 =d add %y0, %d
+	ret %z0
+@no
+	%y1 =d swtof %c
+	%z1 =d sub %y1, %d
+	ret %z1
+}
+
+export function l $jmp4(l %p) {
+@start
+	%b =l add extern $tok, 8
+	%c =w cnel %p, 0
+	jnz %c, @yes, @join
+@yes
+	%a =l call $ident(l %p)
+@join
+	%r =l phi @yes %a, @start %b
+	%v =l loadl %r
+	%e =l extuw %c
+	%s =l add %v, %e
+	ret %s
+}
+
+# conditional jumps, the flags of an and and
+# of a sub are reused
+export function l $jmp5(w %x, l %p) {
+@start
+	%b =l add extern $tok, 8
+	%c =w and %x, 1
+	jnz %c, @yes, @join
+@yes
+	%a =l call $ident(l %p)
+@join
+	%r =l phi @yes %a, @start %b
+	%v =l loadl %r
+	ret %v
+}
+
+export function l $jmp6(w %x, w %y, l %p) {
+@start
+	%b =l add extern $tok, 8
+	%c =w sub %x, %y
+	jnz %c, @yes, @join
+@yes
+	%a =l call $ident(l %p)
+@join
+	%r =l phi @yes %a, @start %b
+	%v =l loadl %r
+	ret %v
+}
+
+# conditional jumps for which reusing the
+# flags of an and or of a sub is fine
+export function w $jmp7(w %x) {
+@start
+	%c =w and %x, 6
+	jnz %c, @yes, @no
+@yes
+	ret 1
+@no
+	ret 0
+}
+
+export function w $jmp8(w %x, w %y) {
+@start
+	%c =w sub %x, %y
+	jnz %c, @yes, @no
+@yes
+	ret %c
+@no
+	ret 1000
+}
+
+# amd64 shifts do not change the flags when
+# the shift count is zero
+export function w $shl0(w %a, w %n, w %q) {
+@start
+	%s =w sub %q, %a
+	storew %s, extern $sink
+	%x =w shl %a, %n
+	jnz %x, @yes, @no
+@yes
+	ret 1
+@no
+	ret 0
+}
+
+export function w $shr0(w %a, w %n, w %q) {
+@start
+	%s =w sub %q, %a
+	storew %s, extern $sink
+	%x =w shr %a, %n
+	jnz %x, @yes, @no
+@yes
+	jmp @join
+@no
+@join
+	%r =w phi @yes 10, @no 20
+	ret %r
+}
+
+export function w $sar0(w %a, w %q) {
+@start
+	%s =w sub %q, %a
+	storew %s, extern $sink
+	%x =w sar %a, 32
+	jnz %x, @yes, @no
+@yes
+	ret 1
+@no
+	ret 0
+}
+
+export function w $shr1(w %a) {
+@start
+	%x =w shr %a, 1
+	jnz %x, @yes, @no
+@yes
+	ret 1
+@no
+	ret 0
+}
+
+# >>> driver
+# long tok[5] = {7, 42, 43, 400, 500};
+# int sink;
+# long one[1] = {99};
+# long ident(long p) { return p; }
+# extern long cmov1(long *), cmov2(long *), cmov3(long *);
+# extern long cmov4(int), cmov5(int, int);
+# extern long cmov6(int, long, long), cmov7(int, int, long, long);
+# extern long jmp1(long *), jmp2(long *), jmp4(long *);
+# extern double jmp3(long *, unsigned long);
+# extern long jmp5(int, long *), jmp6(int, int, long *);
+# extern int jmp7(int), jmp8(int, int);
+# extern int shl0(int, int, int), shr0(int, int, int);
+# extern int sar0(int, int), shr1(int);
+# int main() {
+# 	long buf[4] = {0, 0, 0, 77};
+# 	int n = 0;
+# #define T(e) n++; if (!(e)) return n;
+# 	T(cmov1(0) == 42)
+# 	T(cmov1(buf) == 77)
+# 	T(cmov2(0) == 442)
+# 	T(cmov2(buf) == 543)
+# 	T(cmov3(0) == 43)
+# 	T(cmov3(buf) == 43)
+# 	T(cmov4(3) == 42)
+# 	T(cmov4(2) == 43)
+# 	T(cmov5(5, 4) == 42)
+# 	T(cmov5(5, 5) == 43)
+# 	T(cmov6(3, 10, 20) == 10)
+# 	T(cmov6(2, 10, 20) == 20)
+# 	T(cmov7(5, 4, 10, 20) == 11)
+# 	T(cmov7(5, 5, 10, 20) == 20)
+# 	T(jmp1(0) == 42)
+# 	T(jmp1(one) == 99)
+# 	T(jmp2(0) == 42)
+# 	T(jmp2(one) == 101)
+# 	T(jmp3(0, 5) == -5.0)
+# 	T(jmp3(one, 5) == 6.0)
+# 	T(jmp4(0) == 42)
+# 	T(jmp4(one) == 100)
+# 	T(jmp5(2, one) == 42)
+# 	T(jmp5(3, one) == 99)
+# 	T(jmp6(5, 5, one) == 42)
+# 	T(jmp6(5, 4, one) == 99)
+# 	T(jmp7(8) == 0)
+# 	T(jmp7(4) == 1)
+# 	T(jmp8(5, 5) == 1000)
+# 	T(jmp8(7, 5) == 2)
+# 	T(shl0(1, 0, 1) == 1)
+# 	T(shl0(0, 0, 3) == 0)
+# 	T(shl0(1, 1, 3) == 1)
+# 	T(shr0(1, 0, 1) == 10)
+# 	T(shr0(0, 0, 3) == 20)
+# 	T(shr0(4, 1, 3) == 10)
+# 	T(sar0(1, 1) == 1)
+# 	T(sar0(0, 3) == 0)
+# 	T(shr1(1) == 0)
+# 	T(shr1(2) == 1)
+# 	return 0;
+# }
+# <<<

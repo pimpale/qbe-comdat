@@ -59,6 +59,7 @@ enum Token {
 	Tthread,
 	Textern,
 	Tcommon,
+	Tcomdat,
 	Tfunc,
 	Ttype,
 	Tdata,
@@ -119,6 +120,7 @@ static char *kwmap[Ntok] = {
 	[Tthread] = "thread",
 	[Textern] = "extern",
 	[Tcommon] = "common",
+	[Tcomdat] = "comdat",
 	[Tfunc] = "function",
 	[Ttype] = "type",
 	[Tdata] = "data",
@@ -1194,6 +1196,9 @@ parselnk(Lnk *lnk)
 		case Tcommon:
 			lnk->common = 1;
 			break;
+		case Tcomdat:
+			lnk->comdat = 1;
+			break;
 		case Tsection:
 			if (lnk->sec)
 				err("only one section allowed");
@@ -1210,6 +1215,10 @@ parselnk(Lnk *lnk)
 				err("only data may have thread linkage");
 			if (haslnk && t != Tdata && t != Tfunc)
 				err("only data and function have linkage");
+			if (lnk->comdat && lnk->sec)
+				err("comdat and section cannot be combined");
+			if (lnk->comdat && lnk->common)
+				err("comdat and common cannot be combined");
 			return t;
 		}
 }

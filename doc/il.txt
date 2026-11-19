@@ -247,6 +247,7 @@ either constants or function-scope temporaries.
     LINKAGE :=
         'export' [NL]
       | 'thread' [NL]
+      | 'comdat' [NL]
       | 'section' SECNAME [NL]
       | 'section' SECNAME SECFLAGS [NL]
 
@@ -270,6 +271,36 @@ charge of making a new copy of the object for the
 fresh thread.  Objects in thread-local storage must
 be accessed using the `thread $IDENT` syntax, as
 specified in the <@ Constants and Vals > section.
+
+The `comdat` linkage flag marks the defined item as
+mergeable: the same symbol can be defined, with the
+`comdat` flag, in multiple files linked together, and
+the linker keeps exactly one of the definitions.  All
+references to the symbol, from any file, resolve to the
+definition kept.  It is meant for items that have to be
+emitted in every file using them, like C++ inline
+functions and template instances.  The definitions of
+a symbol in the different files are expected to be
+equivalent, the linker is free to keep any one of them.
+
+    export comdat
+    function w $"add<int>"(w %a, w %b) {
+    @start
+            %c =w add %a, %b
+            ret %c
+    }
+
+    export comdat data $"SIZE<char>" = align 8 { l 2 }
+
+The `comdat` flag implies `export` and can be combined
+with the `thread` flag for data definitions; it cannot
+be combined with the `section` flag.  On ELF targets,
+the item is defined as a weak symbol in a section of
+its own that is the only member of a COMDAT group named
+after the symbol.  On Apple targets, the item is defined
+as a global weak definition.  On Windows, the item is
+defined in a link-once section of its own and cannot be
+combined with the `thread` flag.
 
 A `section` flag can be specified to tell the linker to
 put the defined item in a certain section.  The use of
